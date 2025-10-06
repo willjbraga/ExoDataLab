@@ -8,8 +8,8 @@ model:
   eval_metric: multi_logloss
   boosting_type: gbdt
   enable_categorical: true
-  iterations: 533
-  depth: 8
+  iterations: 500
+  depth: 6
 dataset:
   name: k2
 device: cuda:0
