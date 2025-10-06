@@ -1,5 +1,40 @@
 model:
+  n_estimators: 10000
+  max_depth: 3
+  learning_rate: 0.001
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  eval_metric: multi_logloss
+  boosting_type: gbdt
+  enable_categorical: true
   iterations: 500
   depth: 6
-  learning_rate: 0.001
-  
+dataset:
+  name: k2
+device: cuda:0
+evaluation_metrics:
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - roc_auc
+  average: macro
+  multi-class: ovr
+graphics:
+  compare_title: Métricas de desempenho - LightGBM
+  confusion_title: Matriz de Confusão - LightGBM
+  compare_label: Valor
+  compare_plot_colors:
+  - aqua
+  - skyblue
+  - aliceblue
+  - palegreen
+  - mediumaquamarine
+  compare_plot_edge: black
+  confusion_plot_color: Blues
+  save_dir_path: graficos
+  name_confusion: confusion_matrix.png
+  name_compare: compare_plot.png
+  bbox_inches: tight

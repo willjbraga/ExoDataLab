@@ -1,143 +1,69 @@
 # HomePage.py
 import csv
 import pandas as pd
-import numpy as np
 import streamlit as st
+import yaml
+from pathlib import Path
+
+from ml_.infer import infer_light 
+
 
 # ------------------------------------------------------------
 # Configuração
 # ------------------------------------------------------------
-#st.set_page_config(
-#    page_title="DataLab SpaceApps – Exoplanet ML",
-#    page_icon="🚀",
-#    layout="wide",
-#)
+# st.set_page_config(
+#     page_title="DataLab SpaceApps – Exoplanet ML",
+#     page_icon="🚀",
+#     layout="wide",
+# )
 
+CFG_PATH = Path(__file__).resolve().parent / "ml_" / "ml_utils.yaml"
+
+@st.cache_data
+def load_cfg():
+    with open(CFG_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+def save_cfg(cfg: dict):
+    with open(CFG_PATH, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+
+cfg = load_cfg()
+model_cfg = cfg.get("model", {})
 
 ss = st.session_state
 ss.setdefault("raw_df", None)
-ss.setdefault("clean_df", None)
-ss.setdefault("schema_ok", False)
-ss.setdefault("status_msg", "Aguardando dados")
-ss.setdefault("log", [])
+ss.setdefault("status_msg", "Waiting for input")
+ss.setdefault("target_col", None)
+ss.setdefault("feature_cols", None)
+ss.setdefault("X", None)
+ss.setdefault("y", None)
 
-# ------------------------------------------------------------
-# Esquema esperado (nomes canônicos + sinônimos + tipo)
-# Inclui o exemplo citado: "Per Koi_Period" → float
-# ------------------------------------------------------------
+# (Opcional) Card informativo dos campos recomendados — não faz validação
 REQUIRED_SCHEMA = {
-    "orbital_period": {
-        "type": "float",
-        "aliases": ["Per Koi_Period", "Koi_Period", "koi_period", "orbital_period", "period", "per"],
-    },
-    "transit_duration": {
-        "type": "float",
-        "aliases": ["koi_duration", "transit_duration", "duration", "dur"],
-    },
-    "planet_radius": {
-        "type": "float",
-        "aliases": ["koi_prad", "planet_radius", "pl_rade", "prad", "radius"],
-    },
-    "star_teff": {
-        "type": "float",
-        "aliases": ["koi_steff", "st_teff", "star_teff", "teff"],
-    },
-    "star_logg": {
-        "type": "float",
-        "aliases": ["koi_slogg", "st_logg", "star_logg", "logg"],
-    },
-    "snr": {
-        "type": "float",
-        "aliases": ["koi_snr", "snr"],
-    },
+    "orbital_period": {"type": "float", "aliases": ["Per Koi_Period", "Koi_Period", "koi_period", "period", "per"]},
+    "transit_duration": {"type": "float", "aliases": ["koi_duration", "transit_duration", "duration", "dur"]},
+    "planet_radius": {"type": "float", "aliases": ["koi_prad", "planet_radius", "pl_rade", "prad", "radius"]},
+    "star_teff": {"type": "float", "aliases": ["koi_steff", "st_teff", "star_teff", "teff"]},
+    "star_logg": {"type": "float", "aliases": ["koi_slogg", "st_logg", "star_logg", "logg"]},
+    "snr": {"type": "float", "aliases": ["koi_snr", "snr"]},
 }
-CANONICAL_ORDER = list(REQUIRED_SCHEMA.keys())
-
-# ------------------------------------------------------------
-# Utilidades
-# ------------------------------------------------------------
-def _lower_strip(s: str) -> str:
-    return s.strip().lower().replace("\n", " ")
-
-def sniff_is_csv(upload) -> bool:
-    name_ok = upload.name.lower().endswith(".csv")
-    try:
-        sample = upload.read(4096).decode("utf-8", errors="ignore")
-        upload.seek(0)
-        csv.Sniffer().sniff(sample)
-        sniff_ok = True
-    except Exception:
-        sniff_ok = False
-    return name_ok and sniff_ok
 
 def read_csv_any(upload):
+    # Garante que a leitura comece do início do arquivo
+    upload.seek(0)
     try:
-        upload.seek(0)
-        return pd.read_csv(upload)              # tenta separador padrão (,)
+        # 1. Tenta ler como uma tabela com espaços como separador (o seu caso)
+        return pd.read_csv(upload, engine='python', comment='#')
     except Exception:
         upload.seek(0)
-        return pd.read_csv(upload, sep=";")     # fallback para ;
-
-def standardize_columns(df: pd.DataFrame):
-    col_map = {}
-    lower_map = {_lower_strip(c): c for c in df.columns}
-    missing = []
-    for canon, spec in REQUIRED_SCHEMA.items():
-        found = None
-        for alias in spec["aliases"]:
-            key = _lower_strip(alias)
-            if key in lower_map:
-                found = lower_map[key]
-                break
-        if found is None:
-            missing.append(canon)
-        else:
-            col_map[found] = canon
-    df2 = df.rename(columns=col_map)
-    return df2, missing, col_map
-
-def coerce_types(df: pd.DataFrame):
-    issues = []
-    df2 = df.copy()
-    for col, spec in REQUIRED_SCHEMA.items():
-        if col not in df2.columns:
-            continue
-        if spec["type"] == "float":
-            before_non_null = df2[col].notna().sum()
-            df2[col] = pd.to_numeric(df2[col], errors="coerce")
-            after_non_null = df2[col].notna().sum()
-            bad = before_non_null - after_non_null
-            if bad > 0:
-                issues.append(f"Coluna '{col}': {bad} valor(es) inválido(s) para float → convertidos em NaN.")
-        else:
-            issues.append(f"Tipo '{spec['type']}' ainda não implementado para '{col}'.")
-    return df2, issues
-
-def validate_schema(df: pd.DataFrame):
-    log = []
-
-    # 1) Padronizar nomes
-    df_std, missing, mapping = standardize_columns(df)
-    if mapping:
-        mapped_str = ", ".join([f"'{src}'→'{dst}'" for src, dst in mapping.items()])
-        log.append(f"Mapeamento de colunas: {mapped_str}.")
-    if missing:
-        log.append("Colunas obrigatórias ausentes: " + ", ".join([f"'{m}'" for m in missing]) + ".")
-        return df_std, False, log
-
-    # 2) Converter tipos
-    df_typed, type_issues = coerce_types(df_std)
-    log.extend(type_issues)
-
-    # 3) Checar NaNs nas obrigatórias (permitimos NaN; tratamento pode ser em outra etapa)
-    na_counts = df_typed[CANONICAL_ORDER].isna().sum()
-    na_total = int(na_counts.sum())
-    if na_total > 0:
-        brk = ", ".join([f"{c}:{int(n)}" for c, n in na_counts.items() if n > 0])
-        log.append(f"Valores ausentes após conversão → {na_total} ({brk}).")
-
-    ok = len(missing) == 0
-    return df_typed, ok, log
+        try:
+            # 2. Tenta ler como um CSV padrão (separado por vírgula)
+            return pd.read_csv(upload, comment='#')
+        except Exception:
+            upload.seek(0)
+            # 3. Tenta ler como um CSV separado por ponto e vírgula
+            return pd.read_csv(upload, sep=';', comment='#')
 
 def sample_df():
     return pd.DataFrame({
@@ -147,44 +73,23 @@ def sample_df():
         "star_teff": [5700, 5700, 5700],
         "star_logg": [4.4, 4.3, 4.5],
         "snr": [4.4, 5.4, 5.6],
+        "koi_disposition": ["CANDIDATE", "CONFIRMED", "FALSE POSITIVE"],
     })
 
 # ------------------------------------------------------------
-# Sidebar (menu)
+# UI
 # ------------------------------------------------------------
-#st.sidebar.title("DataLab SpaceApps")
-#st.sidebar.caption("Machine Learning for exoplanets detection")
-#page = st.sidebar.radio("Navigation", ["Home", "Treinar Modelo", "Classificar", "Métricas", "Sobre"], index=0)
-#page = st.navigation(
-#    {
-#        "Home": [st.Page("homepage.py", title = "HomePage", icon = ":material/home:")],
-#        "Data": [st.Page("results.py", title = "Results", icon = ":material/insights:")]
-#    }
-#)
-
-# ------------------------------------------------------------
-# Cabeçalho
-# ------------------------------------------------------------
-#st.title("DataLab SpaceApps – Exoplanet AI")
-st.caption("Carregue um CSV no padrão exigido; o app detecta colunas, valida tipos e prepara o pipeline.")
+st.caption("Upload a CSV; the app only reads and shows the data. Select the training target on a different page.")
 
 m1, m2, m3 = st.columns(3)
-m1.metric("Acurácia (validação)", "—")
+m1.metric("Accuracy (validation set)", "—")
 m2.metric("F1-Score", "—")
-m3.metric("Status do modelo", ss["status_msg"])
+m3.metric("Model status", ss["status_msg"])
 
-# ------------------------------------------------------------
-# Conteúdo por página (a Home realiza apenas validação)
-# ------------------------------------------------------------
-#if page != "Início":
-#    st.info("Esta é a Home. Use as páginas **Treinar Modelo** e **Classificar** (outros arquivos) para o restante do fluxo.")
-#    st.stop()
-
-# -------- Início (Home) --------
 st.subheader("Dados de entrada")
 
-# Card com campos obrigatórios
-with st.expander("📋 Campos obrigatórios do CSV (padrão exigido)", expanded=True):
+# Card informativo (sem validação)
+with st.expander("📋 Colunas recomendadas para o dataset (informativo – sem validação)", expanded=False):
     schema_rows = []
     for canon, spec in REQUIRED_SCHEMA.items():
         schema_rows.append({
@@ -193,68 +98,100 @@ with st.expander("📋 Campos obrigatórios do CSV (padrão exigido)", expanded=
             "sinônimos aceitos": ", ".join(spec["aliases"]),
         })
     st.dataframe(pd.DataFrame(schema_rows), use_container_width=True)
-    st.caption("Os nomes do seu arquivo podem ser qualquer um dos **sinônimos**; eles serão normalizados para o nome canônico.")
+    st.caption("Apenas informativo. Seu CSV é aceito como estiver; a padronização/limpeza pode ser feita depois.")
 
 # Upload + Preview
-upload = st.file_uploader("Carregue um CSV seguindo o padrão acima.", type=["csv"])
+upload = st.file_uploader("Upload a CSV file.", type=["csv"])
 if upload is not None:
-    if not sniff_is_csv(upload):
-        st.error("Arquivo não reconhecido como CSV válido (.csv).")
-    else:
-        try:
-            df = read_csv_any(upload)
-            ss["raw_df"] = df.copy()
-        except Exception as e:
-            st.error(f"Falha ao ler CSV: {e}")
+    try:
+        df = read_csv_any(upload)
+        ss["raw_df"] = df.copy()
+        ss["status_msg"] = "CSV file loaded"
+    except Exception as e:
+        st.error(f"CSV import failed: {e}")
+
 
 preview = ss["raw_df"] if ss["raw_df"] is not None else sample_df()
 st.dataframe(preview.head(), use_container_width=True)
 
-st.write("""
-## Hyperparameter Configuration
-""")
-iterations = st.slider(label = "Iterations",min_value = 0, max_value = 1000, value=500)
-depth = st.slider(label = "Depth",min_value = 0, max_value = 20, step = 1, value = 6 )
-learning_rate = st.slider (label = "Learning Rate", min_value = 0.00001, max_value = 0.001, step = 0.00001, format="%0.5f", value = 0.001)
+st.write("## Hyperparameter Configuration")
+iterations = st.slider("Iterations", min_value=0, max_value=1000, value=500)
+depth = st.slider("Depth", min_value=0, max_value=20, step=1, value=6)
+learning_rate = st.slider("Learning Rate", min_value=0.00001, max_value=0.001, step=0.00001, format="%0.5f", value=0.001)
 
 
-# Opções (somente sinalização visual; tratadas de fato em outras páginas)
-#c1, c2, c3 = st.columns(3)
-#detect_numeric = c1.checkbox("Detectar colunas numéricas", value=False)
-#treat_missing  = c2.checkbox("Tratar valores ausentes", value=False)
-#normalize_feat = c3.checkbox("Normalizar features", value=False)
+# Target
+st.subheader("Target column")
+if ss["raw_df"] is None:
+    st.info("Upload a CSV to unlock target selection.")
+else:
+    df_ok = ss["raw_df"]
+    cols = list(df_ok.columns)
 
-# Ações
-a, b, c = st.columns(3)
-if a.button("Limpar & Validar", use_container_width=True):
-    base = ss["raw_df"] if ss["raw_df"] is not None else preview
-    df_checked, ok, v_log = validate_schema(base)
+    # palpites de nomes comuns para target
+    guesses = ["koi_disposition", "disposition", "koi_pdisposition", "label", "target", "class", "status"]
+    default_target = ss["target_col"] if ss["target_col"] in cols else None
+    if default_target is None:
+        for g in guesses:
+            if g in cols:
+                default_target = g
+                break
+    default_index = cols.index(default_target) if default_target in cols else 0
 
-    #if detect_numeric:
-    #    v_log.append("Sinalização: detectar colunas numéricas (aplicação completa no pré-processo).")
-    #if treat_missing:
-    #    v_log.append("Sinalização: tratar valores ausentes (aplicação completa no pré-processo).")
-    #if normalize_feat:
-    #    v_log.append("Sinalização: normalizar features (aplicação na etapa de modelagem).")
+    target_col = st.selectbox(
+        "Select the **target** column:",
+        options=cols,
+        index=default_index,
+        help="This column will serve as the label (y); the rest are features (X)."
+    )
+    ss["target_col"] = target_col
 
-    ss["clean_df"] = df_checked
-    ss["schema_ok"] = ok
-    ss["log"] = v_log
-    ss["status_msg"] = "Dados validados" if ok else "Schema inválido"
-    st.success("CSV validado e padronizado." if ok else "CSV inválido para o padrão. Verifique o log.")
-
-if b.button("Treinar Modelo", use_container_width=True):
-    st.info("Treino ocorre em outra página/arquivo (ex.: TreinarModelo.py) usando st.session_state['clean_df'].")
-
-if c.button("Classificar", use_container_width=True):
-    st.info("Classificação ocorre em outra página/arquivo (ex.: Classificar.py) após o treino.")
-
-# Log
-with st.expander("Log de validação"):
-    if ss["log"]:
-        for line in ss["log"]:
-            st.write("• " + line)
+    y = df_ok[target_col]
+    if pd.api.types.is_numeric_dtype(y):
+        st.caption("Resumo do target (numérico):")
+        st.dataframe(y.describe().to_frame("estatística"), use_container_width=True)
     else:
-        st.write("Tipos detectados, valores ausentes, escalonamento pronto.")
+        st.caption("Distribuição de classes do target:")
+        vc = y.value_counts(dropna=False).to_frame("contagem")
+        vc["proporção"] = (vc["contagem"] / len(y)).round(4)
+        st.dataframe(vc, use_container_width=True)
+
+    feature_cols = [c for c in df_ok.columns if c != target_col]
+    ss["feature_cols"] = feature_cols
+    ss["X"] = df_ok[feature_cols]
+    ss["y"] = y
+
+    st.success(f"Target definido: **{target_col}**. Use st.session_state['X'], ['y'], ['feature_cols'], ['target_col'].")
+
+df = st.session_state.get("raw_df")
+target = ss["target_col"]
+print(df)
+
+# Ação (somente Classificar)
+if st.button("Classificar", use_container_width=True):
+    # manter também na sessão para esta execução/página seguinte
+    ss["hp"] = {
+        "iterations": int(iterations),
+        "depth": int(depth),
+        "learning_rate": float(learning_rate),
+    }
+
+    try:
+        cfg.setdefault("model", {})
+        cfg["model"].update(ss["hp"])
+        save_cfg(cfg)
+        st.toast("Hiperparâmetros gravados em ml_utils.yaml", icon="✅")
+    except Exception as e:
+        st.warning(f"Não consegui gravar o YAML ({e}). Usarei os valores em memória.")
+
+    preds, metrics, y_true = infer_light(df, target, upload.name)
+    ss["results"] = {
+        "Preds": preds,
+        "Metrics" : metrics,
+        "True" : y_true
+    }
+
+    st.switch_page("results.py")
+
 
 st.caption("Feito com ❤️ por DataLab — NASA Space Apps 2025")
