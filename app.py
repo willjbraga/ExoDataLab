@@ -2,6 +2,18 @@
 import streamlit as st
 from pathlib import Path
 
+def init_state():
+    defaults = {
+        "results": None,
+        "model": None,
+        "input_data": None,
+    }
+    for key, default in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+init_state()
+
 st.set_page_config(page_title="DataLab SpaceApps – Exoplanet ML", page_icon="🚀", layout="wide")
 
 
