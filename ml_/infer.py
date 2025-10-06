@@ -62,7 +62,7 @@ def infer_light(df, target, dataset_name, name):
     X_query_fg = test_df.drop(columns=[target])
     y_true = test_df[target]
 
-    with open("ml_/ml_utils.yaml", "r") as f:
+    with open("ml_/utils.yaml", "r") as f:
         config = yaml.safe_load(f)
 
     lr = str(config['model']['learning_rate'])
