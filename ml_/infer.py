@@ -12,7 +12,6 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 def pre_process(df, target):
     cols_to_drop = []
-    cat_features = []
     pattern = re.compile(r'\b\w*id\w*\b', re.IGNORECASE)
     for col in df.columns:
         if col == target:
@@ -22,14 +21,19 @@ def pre_process(df, target):
                 cols_to_drop.append(col)
             else:
                 df[col] = df[col].astype("category")
-                cat_features.append(col)
         elif (df[col].dtype != 'float64' and df[col].dtype != 'int64'):
             cols_to_drop.append(col)
     df.drop(columns = cols_to_drop, inplace=True)
-    return df, cat_features
+    return df
 
-def infer_light(df, target, dataset_name):
-    df, cat_features = pre_process(df, target)
+def infer_light(df, target, dataset_name, name):
+    #df, cat_features = pre_process(df, target)
+    pattern = re.compile(r'\b\w*id\w*\b', re.IGNORECASE)
+    cat_features = []
+    for col in df.columns:
+        if (df[col].dtype == 'O'):
+                if not pattern.search(col):
+                    cat_features.append(col)
 
     train_df, test_df = train_test_split(
         df,
@@ -42,6 +46,12 @@ def infer_light(df, target, dataset_name):
         test_size=0.2,   
         shuffle=True    
     )
+
+    labels = test_df[name]
+
+    df_train = pre_process(df_train, target)
+    df_val = pre_process(df_val, target)
+    test_df = pre_process(test_df, target)
 
     X_train_fg = df_train.drop(columns=[target])
     y_train = df_train[target]
@@ -121,11 +131,11 @@ def infer_light(df, target, dataset_name):
         else:
             metrics["ROC AUC"] = roc_auc_score(y_true, y_proba, multi_class=multi_class)
 
-    return y_pred, metrics, y_true
+    return y_pred, metrics, y_true, labels
 
 
 def main():
     infer_light()
 
-if __name__ == "_main_":
+if __name__ == "main":
     main()

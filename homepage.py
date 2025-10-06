@@ -146,6 +146,14 @@ else:
     )
     ss["target_col"] = target_col
 
+    name_col = st.selectbox(
+        "Select the **planet names** column:",
+        options=cols,
+        index=default_index,
+        help="This column will serve as the planet labels; "
+    )
+    ss["name_col"] = name_col
+
     y = df_ok[target_col]
     if pd.api.types.is_numeric_dtype(y):
         st.caption("Resumo do target (numérico):")
@@ -184,11 +192,12 @@ if st.button("Classificar", use_container_width=True):
     except Exception as e:
         st.warning(f"Não consegui gravar o YAML ({e}). Usarei os valores em memória.")
 
-    preds, metrics, y_true = infer_light(df, target, upload.name)
+    preds, metrics, y_true, labels = infer_light(df, target, upload.name, name_col)
     ss["results"] = {
         "Preds": preds,
         "Metrics" : metrics,
-        "True" : y_true
+        "True" : y_true,
+        "Labels" : labels
     }
 
     st.switch_page("results.py")
